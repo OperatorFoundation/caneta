@@ -1,0 +1,13 @@
+build/
+.idea/
+cmake-build-*/
+**/tags
+**/*~
+**/*.swp
+.DS_Store
+*.uf2
+*.bin
+*.hex
+*.elf
+*.dis
+*.map
