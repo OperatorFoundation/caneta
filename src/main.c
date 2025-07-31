@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
@@ -9,7 +10,7 @@
 #include "tusb.h"
 #include "class/hid/hid_host.h"
 
-// Manual function declarations for HID functions that might not be properly declared
+// Manual function declarations for HID functions
 extern bool tuh_hid_receive_report(uint8_t dev_addr, uint8_t instance);
 extern bool tuh_hid_set_protocol(uint8_t dev_addr, uint8_t instance, uint8_t protocol);
 
@@ -17,8 +18,38 @@ extern bool tuh_hid_set_protocol(uint8_t dev_addr, uint8_t instance, uint8_t pro
 #define UART_ID uart1
 #define UART_TX_PIN 20  // GPIO20 - TX only
 
-// USB pins - YOUR ACTUAL WIRING: D+ on GPIO4, D- on GPIO3
+// USB pins
 #define USB_HOST_DP_PIN 4   // GPIO4 for D+
+
+// HID scan codes to ASCII mapping (US keyboard layout)
+static const char hid_to_ascii[256] = {
+    0,   0,   0,   0,   'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l',  // 0x00-0x0F
+    'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '1', '2',  // 0x10-0x1F
+    '3', '4', '5', '6', '7', '8', '9', '0', '\r', '\x1B', '\b', '\t', ' ', '-', '=', '[', // 0x20-0x2F
+    ']', '\\', 0, ';', '\'', '`', ',', '.', '/', 0, 0, 0, 0, 0, 0, 0,                    // 0x30-0x3F
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,                                    // 0x40-0x4F
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,                                    // 0x50-0x5F
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,                                    // 0x60-0x6F
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,                                    // 0x70-0x7F
+    [0x80 ... 0xFF] = 0  // Rest are 0
+};
+
+// Shifted characters for uppercase and symbols
+static const char hid_to_ascii_shift[256] = {
+    0,   0,   0,   0,   'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',  // 0x00-0x0F
+    'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '!', '@',  // 0x10-0x1F
+    '#', '$', '%', '^', '&', '*', '(', ')', '\r', '\x1B', '\b', '\t', ' ', '_', '+', '{', // 0x20-0x2F
+    '}', '|', 0, ':', '"', '~', '<', '>', '?', 0, 0, 0, 0, 0, 0, 0,                    // 0x30-0x3F
+    [0x40 ... 0xFF] = 0  // Rest are 0
+};
+
+// Keyboard state
+static struct {
+    bool shift_pressed;
+    bool ctrl_pressed;
+    bool alt_pressed;
+    uint8_t last_keys[6];
+} kbd_state = {0};
 
 void uart_setup() {
     uart_init(UART_ID, 115200);
@@ -28,193 +59,224 @@ void uart_setup() {
     uart_set_fifo_enabled(UART_ID, false);
 }
 
-void print_to_uart(const char* str) {
+void send_to_terminal(const char* str) {
     uart_puts(UART_ID, str);
 }
 
-// Add debugging for any USB activity
-void tuh_mount_cb(uint8_t dev_addr) {
-    char msg[64];
-    sprintf(msg, "*** DEVICE CONNECTED: addr=%d ***\r\n", dev_addr);
-    print_to_uart(msg);
+void send_vt100_escape(const char* sequence) {
+    uart_putc_raw(UART_ID, '\x1B');  // ESC
+    uart_puts(UART_ID, sequence);
 }
 
-void tuh_umount_cb(uint8_t dev_addr) {
-    char msg[64];
-    sprintf(msg, "*** DEVICE DISCONNECTED: addr=%d ***\r\n", dev_addr);
-    print_to_uart(msg);
+void process_special_keys(uint8_t keycode) {
+    switch(keycode) {
+        case 0x4F: // Right Arrow
+            send_vt100_escape("[C");
+            break;
+        case 0x50: // Left Arrow
+            send_vt100_escape("[D");
+            break;
+        case 0x51: // Down Arrow
+            send_vt100_escape("[B");
+            break;
+        case 0x52: // Up Arrow
+            send_vt100_escape("[A");
+            break;
+        case 0x4A: // Home
+            send_vt100_escape("[H");
+            break;
+        case 0x4D: // End
+            send_vt100_escape("[F");
+            break;
+        case 0x4B: // Page Up
+            send_vt100_escape("[5~");
+            break;
+        case 0x4E: // Page Down
+            send_vt100_escape("[6~");
+            break;
+        case 0x49: // Insert
+            send_vt100_escape("[2~");
+            break;
+        case 0x4C: // Delete
+            send_vt100_escape("[3~");
+            break;
+        case 0x3A: // F1
+            send_vt100_escape("OP");
+            break;
+        case 0x3B: // F2
+            send_vt100_escape("OQ");
+            break;
+        case 0x3C: // F3
+            send_vt100_escape("OR");
+            break;
+        case 0x3D: // F4
+            send_vt100_escape("OS");
+            break;
+        case 0x3E: // F5
+            send_vt100_escape("[15~");
+            break;
+        case 0x3F: // F6
+            send_vt100_escape("[17~");
+            break;
+        case 0x40: // F7
+            send_vt100_escape("[18~");
+            break;
+        case 0x41: // F8
+            send_vt100_escape("[19~");
+            break;
+        case 0x42: // F9
+            send_vt100_escape("[20~");
+            break;
+        case 0x43: // F10
+            send_vt100_escape("[21~");
+            break;
+        case 0x44: // F11
+            send_vt100_escape("[23~");
+            break;
+        case 0x45: // F12
+            send_vt100_escape("[24~");
+            break;
+        default:
+            // Unknown special key - ignore
+            break;
+    }
 }
 
-// Add HID support
-void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len) {
-    char msg[128];
-    uint16_t vid, pid;
-    tuh_vid_pid_get(dev_addr, &vid, &pid);
+void process_hid_report(uint8_t const* report, uint16_t len) {
+    if (len < 8) return;  // Standard keyboard report is 8 bytes
 
-    sprintf(msg, "!!! HID DEVICE MOUNTED: addr=%d, instance=%d, VID=%04X, PID=%04X !!!\r\n",
-            dev_addr, instance, vid, pid);
-    print_to_uart(msg);
+    // Byte 0: Modifier keys
+    uint8_t modifiers = report[0];
+    bool shift = (modifiers & 0x22) != 0;  // Left or right shift
+    bool ctrl = (modifiers & 0x11) != 0;   // Left or right ctrl
+    bool alt = (modifiers & 0x44) != 0;    // Left or right alt
 
-    sprintf(msg, "HID Report Descriptor Length: %d bytes\r\n", desc_len);
-    print_to_uart(msg);
+    kbd_state.shift_pressed = shift;
+    kbd_state.ctrl_pressed = ctrl;
+    kbd_state.alt_pressed = alt;
 
-    // Print some of the report descriptor to see what we're dealing with
-    print_to_uart("Report descriptor (first 16 bytes): ");
-    for(int i = 0; i < 16 && i < desc_len; i++) {
-        sprintf(msg, "%02X ", desc_report[i]);
-        print_to_uart(msg);
+    // Byte 1: Reserved (always 0)
+    // Bytes 2-7: Up to 6 pressed keys
+
+    // Check for newly pressed keys
+    for (int i = 2; i < 8; i++) {
+        uint8_t keycode = report[i];
+        if (keycode == 0) continue;  // No key
+
+        // Check if this is a new key press (not in last report)
+        bool was_pressed = false;
+        for (int j = 0; j < 6; j++) {
+            if (kbd_state.last_keys[j] == keycode) {
+                was_pressed = true;
+                break;
+            }
+        }
+
+        if (!was_pressed) {
+            // New key press - process it
+            char ascii_char = 0;
+
+            // Handle special keys first
+            if (keycode >= 0x3A) {  // Function keys and arrows
+                process_special_keys(keycode);
+                continue;
+            }
+
+            // Handle regular keys
+            if (shift) {
+                ascii_char = hid_to_ascii_shift[keycode];
+            } else {
+                ascii_char = hid_to_ascii[keycode];
+            }
+
+            if (ascii_char != 0) {
+                // Handle Ctrl combinations
+                if (ctrl && ascii_char >= 'a' && ascii_char <= 'z') {
+                    ascii_char = ascii_char - 'a' + 1;  // Ctrl+A = 0x01, etc.
+                } else if (ctrl && ascii_char >= 'A' && ascii_char <= 'Z') {
+                    ascii_char = ascii_char - 'A' + 1;
+                }
+
+                // Send the character
+                uart_putc_raw(UART_ID, ascii_char);
+            }
+        }
     }
-    print_to_uart("\r\n");
 
-    print_to_uart("HID device ready - requesting reports...\r\n");
-
-    // Now try to request HID reports
-    if (tuh_hid_receive_report(dev_addr, instance)) {
-        print_to_uart("SUCCESS: HID report request sent\r\n");
-    } else {
-        print_to_uart("FAILED: Could not request HID reports\r\n");
-    }
-
-    // Also try setting boot protocol for keyboards
-    if (tuh_hid_set_protocol(dev_addr, instance, 0)) {  // 0 = boot protocol
-        print_to_uart("Boot protocol set successfully\r\n");
-        // Try requesting report again after setting boot protocol
-        if (tuh_hid_receive_report(dev_addr, instance)) {
-            print_to_uart("SUCCESS: HID report request sent after boot protocol\r\n");
+    // Save current keys for next comparison
+    memset(kbd_state.last_keys, 0, 6);
+    for (int i = 2; i < 8; i++) {
+        if (report[i] != 0) {
+            kbd_state.last_keys[i-2] = report[i];
         }
     }
 }
 
+// USB callbacks
+void tuh_mount_cb(uint8_t dev_addr) {
+    char msg[64];
+    sprintf(msg, "USB device connected (addr=%d)\r\n", dev_addr);
+    send_to_terminal(msg);
+}
+
+void tuh_umount_cb(uint8_t dev_addr) {
+    char msg[64];
+    sprintf(msg, "USB device disconnected (addr=%d)\r\n", dev_addr);
+    send_to_terminal(msg);
+
+    // Reset keyboard state
+    memset(&kbd_state, 0, sizeof(kbd_state));
+}
+
+void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len) {
+    char msg[64];
+    sprintf(msg, "Keyboard connected (addr=%d)\r\n", dev_addr);
+    send_to_terminal(msg);
+
+    // Set boot protocol and request reports
+    tuh_hid_set_protocol(dev_addr, instance, 0);  // Boot protocol
+    tuh_hid_receive_report(dev_addr, instance);
+
+    (void)desc_report;
+    (void)desc_len;
+}
+
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
     char msg[64];
-    sprintf(msg, "!!! HID DEVICE UNMOUNTED: addr=%d, instance=%d !!!\r\n", dev_addr, instance);
-    print_to_uart(msg);
+    sprintf(msg, "Keyboard disconnected (addr=%d)\r\n", dev_addr);
+    send_to_terminal(msg);
+    (void)instance;
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len) {
-    char msg[128];
+    // Process the HID report and translate to VT100
+    process_hid_report(report, len);
 
-    sprintf(msg, "!!! KEY PRESS: addr=%d, len=%d, data: ", dev_addr, len);
-    print_to_uart(msg);
-
-    for(uint16_t i = 0; i < len && i < 8; i++) {
-        sprintf(msg, "%02X ", report[i]);
-        print_to_uart(msg);
-    }
-    print_to_uart(" !!!\r\n");
-
-    // Request the next report to keep data flowing
+    // Request next report
     tuh_hid_receive_report(dev_addr, instance);
-}
 
-void check_gpio_states() {
-    // Read the actual GPIO pin states to see if there's any activity
-    bool dp_state = gpio_get(4);  // D+
-    bool dm_state = gpio_get(3);  // D-
-
-    static bool last_dp = false, last_dm = false;
-    static bool first_check = true;
-
-    if (first_check || dp_state != last_dp || dm_state != last_dm) {
-        char msg[64];
-        sprintf(msg, "GPIO states: D+(GPIO4)=%d, D-(GPIO3)=%d\r\n", dp_state, dm_state);
-        print_to_uart(msg);
-
-        last_dp = dp_state;
-        last_dm = dm_state;
-        first_check = false;
-    }
+    (void)dev_addr;
 }
 
 int main() {
     uart_setup();
     sleep_ms(100);
 
-    print_to_uart("\r\n=== MINIMAL USB HOST TEST ===\r\n");
-    print_to_uart("Trying GPIO4 (D+) and GPIO3 (D-) for USB\r\n");
+    send_to_terminal("\r\n=== USB HID to VT100 Terminal ===\r\n");
+    send_to_terminal("Connect a USB keyboard to start typing\r\n");
 
-    // Configure for your actual wiring: D+ on GPIO4, D- on GPIO3
+    // Configure PIO-USB
     pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
-    pio_cfg.pin_dp = USB_HOST_DP_PIN;      // GPIO4 for D+
-    pio_cfg.pinout = PIO_USB_PINOUT_DMDP;  // D- = D+ - 1 = GPIO3
+    pio_cfg.pin_dp = USB_HOST_DP_PIN;
+    pio_cfg.pinout = PIO_USB_PINOUT_DMDP;
 
-    print_to_uart("Configuring PIO-USB...\r\n");
-    bool config_ok = tuh_configure(1, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
-    if (config_ok) {
-        print_to_uart("PIO-USB configuration: SUCCESS\r\n");
-    } else {
-        print_to_uart("PIO-USB configuration: FAILED\r\n");
-    }
+    tuh_configure(1, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
+    tuh_init(1);
 
-    print_to_uart("Initializing TinyUSB...\r\n");
-    bool init_ok = tuh_init(1);
-    if (init_ok) {
-        print_to_uart("TinyUSB initialization: SUCCESS\r\n");
-    } else {
-        print_to_uart("TinyUSB initialization: FAILED\r\n");
-    }
-
-    // Try the opposite pinout as well
-    if (!config_ok || !init_ok) {
-        print_to_uart("Trying DPDM pinout (D- on GPIO5)...\r\n");
-        pio_cfg.pinout = PIO_USB_PINOUT_DPDM;  // D- = D+ + 1 = GPIO5
-        config_ok = tuh_configure(1, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
-        if (config_ok) {
-            print_to_uart("DPDM configuration: SUCCESS\r\n");
-            init_ok = tuh_init(1);
-            if (init_ok) {
-                print_to_uart("TinyUSB with DPDM: SUCCESS\r\n");
-            }
-        }
-    }
-
-    print_to_uart("USB Host ready! Connect a device.\r\n");
-    print_to_uart("Using D+ on GPIO4, D- on GPIO3\r\n");
-
-    // Check if HID driver is enabled
-    #ifdef CFG_TUH_HID
-    char msg[64];
-    sprintf(msg, "HID driver enabled, max devices: %d\r\n", CFG_TUH_HID);
-    print_to_uart(msg);
-    #else
-    print_to_uart("WARNING: HID driver not enabled!\r\n");
-    #endif
-
-    print_to_uart("\r\n");
-
-    uint32_t counter = 0;
-    uint32_t last_status = 0;
+    send_to_terminal("USB host initialized\r\n\r\n");
 
     while (1) {
         tuh_task();
-        counter++;
-
-        // Status every 3 seconds
-        uint32_t now = to_ms_since_boot(get_absolute_time());
-        if (now - last_status > 3000) {
-            char msg[64];
-            sprintf(msg, "USB host running... (task cycles: %lu)\r\n", counter);
-            print_to_uart(msg);
-
-            // Check if any devices are mounted
-            bool any_mounted = false;
-            for (uint8_t addr = 1; addr < 5; addr++) {
-                if (tuh_mounted(addr)) {
-                    sprintf(msg, "Device mounted at address %d\r\n", addr);
-                    print_to_uart(msg);
-                    any_mounted = true;
-                }
-            }
-            if (!any_mounted) {
-                print_to_uart("No devices detected\r\n");
-            }
-
-            // Check GPIO pin states for any activity
-            check_gpio_states();
-
-            last_status = now;
-        }
-
         sleep_us(100);
     }
 
