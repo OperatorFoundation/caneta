@@ -63,8 +63,7 @@ target_include_directories(${target_name} PRIVATE
 
 target_sources(${target_name} PRIVATE
   ${CANETA_PATH}/main.c
-  ${CANETA_PATH}/usb_descriptors.c
-
+  ${CANETA_PATH}/tusb_config.h
 )
 
 # print memory usage, enable all warnings
@@ -77,17 +76,25 @@ target_compile_definitions(${target_name} PRIVATE PIO_USB_USE_TINYUSB)
 # needed so tinyusb can find tusb_config.h
 target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 
+target_compile_definitions(caneta PRIVATE
+  CFG_TUH_HID=2
+  CFG_TUSB_DEBUG=1
+)
+
 target_link_libraries(${target_name} PRIVATE
   pico_stdlib
   pico_pio_usb
-  tinyusb_device
   tinyusb_host
   hardware_pio
   hardware_dma
   pico_multicore
   pico_unique_id
+  hardware_uart
+  tinyusb_host
 )
 pico_add_extra_outputs(${target_name})
+
+pico_enable_stdio_uart(caneta 0)
 
 # macOS Upload using picotool
 add_custom_target(upload

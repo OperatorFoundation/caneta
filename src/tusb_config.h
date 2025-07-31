@@ -1,28 +1,3 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2019 Ha Thach (tinyusb.org)
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- *
- */
-
 #ifndef _TUSB_CONFIG_H_
 #define _TUSB_CONFIG_H_
 
@@ -30,29 +5,59 @@
  extern "C" {
 #endif
 
-#ifndef HID_ITF_PROTOCOL_KEYBOARD
-#define HID_ITF_PROTOCOL_KEYBOARD 1
-#endif
-
-#ifndef HID_ITF_PROTOCOL_MOUSE
-#define HID_ITF_PROTOCOL_MOUSE 2
-#endif
-
-//--------------------------------------------------------------------
+//--------------------------------------------------------------------+
 // COMMON CONFIGURATION
+//--------------------------------------------------------------------+
+
+// defined by board.cmake
+#ifndef CFG_TUSB_MCU
+  #error CFG_TUSB_MCU must be defined
+#endif
+
+// RHPort number used for device can be defined by board.mk, default to port 0
+#ifndef BOARD_TUD_RHPORT
+#define BOARD_TUD_RHPORT      0
+#endif
+
+// RHPort max operational speed can defined by board.mk
+// Default to Highspeed for MCU with internal HighSpeed PHY (can be port specific), otherwise FullSpeed
+#ifndef BOARD_TUD_MAX_SPEED
+#define BOARD_TUD_MAX_SPEED   OPT_MODE_DEFAULT_SPEED
+#endif
+
 //--------------------------------------------------------------------
+// DEVICE CONFIGURATION
+//--------------------------------------------------------------------
+#ifndef CFG_TUD_ENABLED
+#define CFG_TUD_ENABLED       0
+#endif
 
-#define CFG_TUSB_OS               OPT_OS_PICO
+//--------------------------------------------------------------------
+// HOST CONFIGURATION
+//--------------------------------------------------------------------
+#ifndef CFG_TUH_ENABLED
+#define CFG_TUH_ENABLED       1
+#endif
 
-// Enable device stack
-#define CFG_TUD_ENABLED     1
+// Size of buffer to hold descriptors and other data used for enumeration
+#ifndef CFG_TUH_ENUMERATION_BUFSIZE
+#define CFG_TUH_ENUMERATION_BUFSIZE 256
+#endif
 
-// Enable host stack with pio-usb if Pico-PIO-USB library is available
-#define CFG_TUH_ENABLED     1
-#define CFG_TUH_RPI_PIO_USB 1
+// Default is max speed that hardware controller could support with on-chip PHY
+#ifndef CFG_TUH_MAX_SPEED
+#define CFG_TUH_MAX_SPEED     OPT_MODE_DEFAULT_SPEED
+#endif
 
-// CFG_TUSB_DEBUG is defined by compiler in DEBUG build
-// #define CFG_TUSB_DEBUG           0
+// Maximum number of device that can be enumerated
+#ifndef CFG_TUH_DEVICE_MAX
+#define CFG_TUH_DEVICE_MAX    (CFG_TUH_HUB ? 4 : 1)
+#endif
+
+// Enable Host HUB Class
+#ifndef CFG_TUH_HUB
+#define CFG_TUH_HUB           0
+#endif
 
 /* USB DMA on some MCUs can only access a specific SRAM region with restriction on alignment.
  * Tinyusb use follows macros to declare transferring memory so that they can be put
@@ -70,37 +75,46 @@
 #endif
 
 //--------------------------------------------------------------------
-// DEVICE CONFIGURATION
+// HOST CLASS DRIVER CONFIGURATION
 //--------------------------------------------------------------------
 
-#ifndef CFG_TUD_ENDPOINT0_SIZE
-#define CFG_TUD_ENDPOINT0_SIZE    64
+// Enable Host HID Class
+#ifndef CFG_TUH_HID
+#define CFG_TUH_HID             2
 #endif
 
-//------------- CLASS -------------//
-#define CFG_TUD_CDC              1
+// Enable Host CDC Class
+#ifndef CFG_TUH_CDC
+#define CFG_TUH_CDC             0
+#endif
 
-// CDC FIFO size of TX and RX
-#define CFG_TUD_CDC_RX_BUFSIZE   256
-#define CFG_TUD_CDC_TX_BUFSIZE   256
+// Enable Host MSC Class
+#ifndef CFG_TUH_MSC
+#define CFG_TUH_MSC             0
+#endif
 
-// CDC Endpoint transfer buffer size, more is faster
-#define CFG_TUD_CDC_EP_BUFSIZE   64
+// Enable Host MIDI Class
+#ifndef CFG_TUH_MIDI
+#define CFG_TUH_MIDI            0
+#endif
+
+// Enable Host Vendor Class
+#ifndef CFG_TUH_VENDOR
+#define CFG_TUH_VENDOR          0
+#endif
 
 //--------------------------------------------------------------------
-// HOST CONFIGURATION
+// COMMON CLASS CONFIGURATION
 //--------------------------------------------------------------------
 
-// Size of buffer to hold descriptors and other data used for enumeration
-#define CFG_TUH_ENUMERATION_BUFSIZE 256
-
-#define CFG_TUH_HUB                 1
-// max device support (excluding hub device)
-#define CFG_TUH_DEVICE_MAX          (CFG_TUH_HUB ? 4 : 1) // hub typically has 4 ports
-
-#define CFG_TUH_HID                  4
-#define CFG_TUH_HID_EPIN_BUFSIZE    64
-#define CFG_TUH_HID_EPOUT_BUFSIZE   64
+// Debug level for TinyUSB
+// 0: no debug
+// 1: error
+// 2: warning
+// 3: info
+#ifndef CFG_TUSB_DEBUG
+#define CFG_TUSB_DEBUG          2
+#endif
 
 #ifdef __cplusplus
  }

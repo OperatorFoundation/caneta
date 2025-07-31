@@ -1,275 +1,222 @@
-/*
- * The MIT License (MIT)
- *
- * Copyright (c) 2019 Ha Thach (tinyusb.org)
- *                    sekigon-gonnoc
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- *
- */
-
-// This example runs both host and device concurrently. The USB host receive
-// reports from HID device and print it out over USB Device CDC interface.
-// For TinyUSB roothub port0 is native usb controller, roothub port1 is
-// pico-pio-usb.
-
-#include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
-
-#include "hardware/clocks.h"
+#include <stdlib.h>
 #include "pico/stdlib.h"
-#include "pico/multicore.h"
-#include "pico/bootrom.h"
+#include "hardware/uart.h"
+#include "hardware/gpio.h"
 
+// PIO-USB includes
 #include "pio_usb.h"
 #include "tusb.h"
-
-#include "device/usbd.h"
-#include "class/cdc/cdc_device.h"
-#include "host/usbh.h"
 #include "class/hid/hid_host.h"
-#include "class/hid/hid.h"
 
-//--------------------------------------------------------------------+
-// MACRO CONSTANT TYPEDEF PROTYPES
-//--------------------------------------------------------------------+
+// Manual function declarations for HID functions that might not be properly declared
+extern bool tuh_hid_receive_report(uint8_t dev_addr, uint8_t instance);
+extern bool tuh_hid_set_protocol(uint8_t dev_addr, uint8_t instance, uint8_t protocol);
 
-// uncomment if you are using colemak layout
-// #define KEYBOARD_COLEMAK
+// UART configuration
+#define UART_ID uart1
+#define UART_TX_PIN 20  // GPIO20 - TX only
 
-#ifdef KEYBOARD_COLEMAK
-const uint8_t colemak[128] = {
-  0  ,  0,  0,  0,  0,  0,  0, 22,
-  9  , 23,  7,  0, 24, 17,  8, 12,
-  0  , 14, 28, 51,  0, 19, 21, 10,
-  15 ,  0,  0,  0, 13,  0,  0,  0,
-  0  ,  0,  0,  0,  0,  0,  0,  0,
-  0  ,  0,  0,  0,  0,  0,  0,  0,
-  0  ,  0,  0, 18,  0,  0,  0,  0,
-  0  ,  0,  0,  0,  0,  0,  0,  0,
-  0  ,  0,  0,  0,  0,  0,  0,  0,
-  0  ,  0,  0,  0,  0,  0,  0,  0
-};
-#endif
+// USB pins - YOUR ACTUAL WIRING: D+ on GPIO4, D- on GPIO3
+#define USB_HOST_DP_PIN 4   // GPIO4 for D+
 
-static uint8_t const keycode2ascii[128][2] =  { HID_KEYCODE_TO_ASCII };
-
-/*------------- MAIN -------------*/
-
-// core1: handle host events
-void core1_main() {
-  sleep_ms(10);
-
-  // Use tuh_configure() to pass pio configuration to the host stack
-  // Note: tuh_configure() must be called before
-  pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
-  tuh_configure(1, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
-
-  // To run USB SOF interrupt in core1, init host stack for pio_usb (roothub
-  // port1) on core1
-  tuh_init(1);
-
-  while (true) {
-    tuh_task(); // tinyusb host task
-  }
+void uart_setup() {
+    uart_init(UART_ID, 115200);
+    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
+    uart_set_hw_flow(UART_ID, false, false);
+    uart_set_format(UART_ID, 8, 1, UART_PARITY_NONE);
+    uart_set_fifo_enabled(UART_ID, false);
 }
 
-// core0: handle device events
-int main(void) {
-  // default 125MHz is not appropreate. Sysclock should be multiple of 12MHz.
-  set_sys_clock_khz(120000, true);
-
-  sleep_ms(10);
-
-  multicore_reset_core1();
-  // all USB task run in core1
-  multicore_launch_core1(core1_main);
-
-  // init device stack on native usb (roothub port0)
-  tud_init(0);
-
-  while (true) {
-    tud_task(); // tinyusb device task
-    //tud_cdc_write_flush();
-  }
-
-  return 0;
+void print_to_uart(const char* str) {
+    uart_puts(UART_ID, str);
 }
 
-//--------------------------------------------------------------------+
-// Device CDC
-//--------------------------------------------------------------------+
-
-// Invoked when CDC interface received data from host
-void tud_cdc_rx_cb(uint8_t itf)
-{
-  (void) itf;
-
-  char buf[64];
-  uint32_t count = tud_cdc_read(buf, sizeof(buf));
-
-  // TODO control LED on keyboard of host stack
-  (void) count;
+// Add debugging for any USB activity
+void tuh_mount_cb(uint8_t dev_addr) {
+    char msg[64];
+    sprintf(msg, "*** DEVICE CONNECTED: addr=%d ***\r\n", dev_addr);
+    print_to_uart(msg);
 }
 
-//--------------------------------------------------------------------+
-// Host HID
-//--------------------------------------------------------------------+
+void tuh_umount_cb(uint8_t dev_addr) {
+    char msg[64];
+    sprintf(msg, "*** DEVICE DISCONNECTED: addr=%d ***\r\n", dev_addr);
+    print_to_uart(msg);
+}
 
-// Invoked when device with hid interface is mounted
-// Report descriptor is also available for use. tuh_hid_parse_report_descriptor()
-// can be used to parse common/simple enough descriptor.
-// Note: if report descriptor length > CFG_TUH_ENUMERATION_BUFSIZE, it will be skipped
-// therefore report_desc = NULL, desc_len = 0
-void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len)
-{
-  (void)desc_report;
-  (void)desc_len;
+// Add HID support
+void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len) {
+    char msg[128];
+    uint16_t vid, pid;
+    tuh_vid_pid_get(dev_addr, &vid, &pid);
 
-  // Interface protocol (hid_interface_protocol_enum_t)
-  const char* protocol_str[] = { "None", "Keyboard", "Mouse" };
-  uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+    sprintf(msg, "!!! HID DEVICE MOUNTED: addr=%d, instance=%d, VID=%04X, PID=%04X !!!\r\n",
+            dev_addr, instance, vid, pid);
+    print_to_uart(msg);
 
-  uint16_t vid, pid;
-  tuh_vid_pid_get(dev_addr, &vid, &pid);
+    sprintf(msg, "HID Report Descriptor Length: %d bytes\r\n", desc_len);
+    print_to_uart(msg);
 
-  char tempbuf[256];
-  int count = sprintf(tempbuf, "[%04x:%04x][%u] HID Interface%u, Protocol = %s\r\n", vid, pid, dev_addr, instance, protocol_str[itf_protocol]);
-
-  tud_cdc_write(tempbuf, count);
-  tud_cdc_write_flush();
-
-  // Receive report from boot keyboard & mouse only
-  // tuh_hid_report_received_cb() will be invoked when report is available
-  if (itf_protocol == HID_ITF_PROTOCOL_KEYBOARD || itf_protocol == HID_ITF_PROTOCOL_MOUSE)
-  {
-    if ( !tuh_hid_receive_report(dev_addr, instance) )
-    {
-      tud_cdc_write_str("Error: cannot request report\r\n");
+    // Print some of the report descriptor to see what we're dealing with
+    print_to_uart("Report descriptor (first 16 bytes): ");
+    for(int i = 0; i < 16 && i < desc_len; i++) {
+        sprintf(msg, "%02X ", desc_report[i]);
+        print_to_uart(msg);
     }
-  }
-}
+    print_to_uart("\r\n");
 
-// Invoked when device with hid interface is un-mounted
-void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
-{
-  char tempbuf[256];
-  int count = sprintf(tempbuf, "[%u] HID Interface%u is unmounted\r\n", dev_addr, instance);
-  tud_cdc_write(tempbuf, count);
-  tud_cdc_write_flush();
-}
+    print_to_uart("HID device ready - requesting reports...\r\n");
 
-// look up new key in previous keys
-static inline bool find_key_in_report(hid_keyboard_report_t const *report, uint8_t keycode)
-{
-  for(uint8_t i=0; i<6; i++)
-  {
-    if (report->keycode[i] == keycode)  return true;
-  }
+    // Now try to request HID reports
+    if (tuh_hid_receive_report(dev_addr, instance)) {
+        print_to_uart("SUCCESS: HID report request sent\r\n");
+    } else {
+        print_to_uart("FAILED: Could not request HID reports\r\n");
+    }
 
-  return false;
-}
-
-
-// convert hid keycode to ascii and print via usb device CDC (ignore non-printable)
-static void process_kbd_report(uint8_t dev_addr, hid_keyboard_report_t const *report)
-{
-  (void) dev_addr;
-  static hid_keyboard_report_t prev_report = { 0, 0, {0} }; // previous report to check key released
-  bool flush = false;
-
-  for(uint8_t i=0; i<6; i++)
-  {
-    uint8_t keycode = report->keycode[i];
-    if ( keycode )
-    {
-      if ( find_key_in_report(&prev_report, keycode) )
-      {
-        // exist in previous report means the current key is holding
-      }else
-      {
-        // not existed in previous report means the current key is pressed
-
-        // remap the key code for Colemak layout
-        #ifdef KEYBOARD_COLEMAK
-        uint8_t colemak_key_code = colemak[keycode];
-        if (colemak_key_code != 0) keycode = colemak_key_code;
-        #endif
-
-        bool const is_shift = report->modifier & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT);
-        uint8_t ch = keycode2ascii[keycode][is_shift ? 1 : 0];
-
-        if (ch)
-        {
-          if (ch == '\n') tud_cdc_write("\r", 1);
-          tud_cdc_write(&ch, 1);
-          flush = true;
+    // Also try setting boot protocol for keyboards
+    if (tuh_hid_set_protocol(dev_addr, instance, 0)) {  // 0 = boot protocol
+        print_to_uart("Boot protocol set successfully\r\n");
+        // Try requesting report again after setting boot protocol
+        if (tuh_hid_receive_report(dev_addr, instance)) {
+            print_to_uart("SUCCESS: HID report request sent after boot protocol\r\n");
         }
-      }
     }
-    // TODO example skips key released
-  }
-
-  if (flush) tud_cdc_write_flush();
-
-  prev_report = *report;
 }
 
-// send mouse report to usb device CDC
-static void process_mouse_report(uint8_t dev_addr, hid_mouse_report_t const * report)
-{
-  //------------- button state  -------------//
-  //uint8_t button_changed_mask = report->buttons ^ prev_report.buttons;
-  char l = report->buttons & MOUSE_BUTTON_LEFT   ? 'L' : '-';
-  char m = report->buttons & MOUSE_BUTTON_MIDDLE ? 'M' : '-';
-  char r = report->buttons & MOUSE_BUTTON_RIGHT  ? 'R' : '-';
-
-  char tempbuf[32];
-  int count = sprintf(tempbuf, "[%u] %c%c%c %d %d %d\r\n", dev_addr, l, m, r, report->x, report->y, report->wheel);
-
-  tud_cdc_write(tempbuf, count);
-  tud_cdc_write_flush();
+void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
+    char msg[64];
+    sprintf(msg, "!!! HID DEVICE UNMOUNTED: addr=%d, instance=%d !!!\r\n", dev_addr, instance);
+    print_to_uart(msg);
 }
 
-// Invoked when received report from device via interrupt endpoint
-void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
-{
-  (void) len;
-  uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len) {
+    char msg[128];
 
-  switch(itf_protocol)
-  {
-    case HID_ITF_PROTOCOL_KEYBOARD:
-      process_kbd_report(dev_addr, (hid_keyboard_report_t const*) report );
-    break;
+    sprintf(msg, "!!! KEY PRESS: addr=%d, len=%d, data: ", dev_addr, len);
+    print_to_uart(msg);
 
-    case HID_ITF_PROTOCOL_MOUSE:
-      process_mouse_report(dev_addr, (hid_mouse_report_t const*) report );
-    break;
+    for(uint16_t i = 0; i < len && i < 8; i++) {
+        sprintf(msg, "%02X ", report[i]);
+        print_to_uart(msg);
+    }
+    print_to_uart(" !!!\r\n");
 
-    default: break;
-  }
+    // Request the next report to keep data flowing
+    tuh_hid_receive_report(dev_addr, instance);
+}
 
-  // continue to request to receive report
-  if ( !tuh_hid_receive_report(dev_addr, instance) )
-  {
-    tud_cdc_write_str("Error: cannot request report\r\n");
-  }
+void check_gpio_states() {
+    // Read the actual GPIO pin states to see if there's any activity
+    bool dp_state = gpio_get(4);  // D+
+    bool dm_state = gpio_get(3);  // D-
+
+    static bool last_dp = false, last_dm = false;
+    static bool first_check = true;
+
+    if (first_check || dp_state != last_dp || dm_state != last_dm) {
+        char msg[64];
+        sprintf(msg, "GPIO states: D+(GPIO4)=%d, D-(GPIO3)=%d\r\n", dp_state, dm_state);
+        print_to_uart(msg);
+
+        last_dp = dp_state;
+        last_dm = dm_state;
+        first_check = false;
+    }
+}
+
+int main() {
+    uart_setup();
+    sleep_ms(100);
+
+    print_to_uart("\r\n=== MINIMAL USB HOST TEST ===\r\n");
+    print_to_uart("Trying GPIO4 (D+) and GPIO3 (D-) for USB\r\n");
+
+    // Configure for your actual wiring: D+ on GPIO4, D- on GPIO3
+    pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
+    pio_cfg.pin_dp = USB_HOST_DP_PIN;      // GPIO4 for D+
+    pio_cfg.pinout = PIO_USB_PINOUT_DMDP;  // D- = D+ - 1 = GPIO3
+
+    print_to_uart("Configuring PIO-USB...\r\n");
+    bool config_ok = tuh_configure(1, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
+    if (config_ok) {
+        print_to_uart("PIO-USB configuration: SUCCESS\r\n");
+    } else {
+        print_to_uart("PIO-USB configuration: FAILED\r\n");
+    }
+
+    print_to_uart("Initializing TinyUSB...\r\n");
+    bool init_ok = tuh_init(1);
+    if (init_ok) {
+        print_to_uart("TinyUSB initialization: SUCCESS\r\n");
+    } else {
+        print_to_uart("TinyUSB initialization: FAILED\r\n");
+    }
+
+    // Try the opposite pinout as well
+    if (!config_ok || !init_ok) {
+        print_to_uart("Trying DPDM pinout (D- on GPIO5)...\r\n");
+        pio_cfg.pinout = PIO_USB_PINOUT_DPDM;  // D- = D+ + 1 = GPIO5
+        config_ok = tuh_configure(1, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
+        if (config_ok) {
+            print_to_uart("DPDM configuration: SUCCESS\r\n");
+            init_ok = tuh_init(1);
+            if (init_ok) {
+                print_to_uart("TinyUSB with DPDM: SUCCESS\r\n");
+            }
+        }
+    }
+
+    print_to_uart("USB Host ready! Connect a device.\r\n");
+    print_to_uart("Using D+ on GPIO4, D- on GPIO3\r\n");
+
+    // Check if HID driver is enabled
+    #ifdef CFG_TUH_HID
+    char msg[64];
+    sprintf(msg, "HID driver enabled, max devices: %d\r\n", CFG_TUH_HID);
+    print_to_uart(msg);
+    #else
+    print_to_uart("WARNING: HID driver not enabled!\r\n");
+    #endif
+
+    print_to_uart("\r\n");
+
+    uint32_t counter = 0;
+    uint32_t last_status = 0;
+
+    while (1) {
+        tuh_task();
+        counter++;
+
+        // Status every 3 seconds
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+        if (now - last_status > 3000) {
+            char msg[64];
+            sprintf(msg, "USB host running... (task cycles: %lu)\r\n", counter);
+            print_to_uart(msg);
+
+            // Check if any devices are mounted
+            bool any_mounted = false;
+            for (uint8_t addr = 1; addr < 5; addr++) {
+                if (tuh_mounted(addr)) {
+                    sprintf(msg, "Device mounted at address %d\r\n", addr);
+                    print_to_uart(msg);
+                    any_mounted = true;
+                }
+            }
+            if (!any_mounted) {
+                print_to_uart("No devices detected\r\n");
+            }
+
+            // Check GPIO pin states for any activity
+            check_gpio_states();
+
+            last_status = now;
+        }
+
+        sleep_us(100);
+    }
+
+    return 0;
 }
