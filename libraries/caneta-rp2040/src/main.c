@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
@@ -16,15 +17,22 @@
 extern bool tuh_hid_receive_report(uint8_t dev_addr, uint8_t instance);
 extern bool tuh_hid_set_protocol(uint8_t dev_addr, uint8_t instance, uint8_t protocol);
 
-// Global keyboard state (required by caneta.h)
-kbd_state_t kbd_state = {0};
-
 // UART configuration
 #define UART_ID uart1
 #define UART_TX_PIN 20  // GPIO20 - TX only
 
 // USB pins
 #define USB_HOST_DP_PIN 4   // GPIO4 for D+
+
+void debug_print(const char* format, ...)
+{
+    char buffer[128];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    uart_puts(UART_ID, buffer);
+}
 
 void uart_setup()
 {
@@ -116,6 +124,9 @@ void process_hid_report(uint8_t const* report, uint16_t len)
 // USB callbacks
 void tuh_mount_cb(uint8_t dev_addr)
 {
+    uart_putc_raw(UART_ID, 'M');
+    debug_print("tuh_mount_cb %d\r\n", dev_addr);
+
     // Silent connection
     (void)dev_addr;
 }
@@ -135,6 +146,10 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 
     (void)desc_report;
     (void)desc_len;
+
+    uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+    uart_putc_raw(UART_ID, 'H');
+    debug_print("HID mounted - dev:%d, instance:%d, protocol:%d\r\n", dev_addr, instance, itf_protocol);
 }
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {

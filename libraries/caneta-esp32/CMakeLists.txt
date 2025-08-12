@@ -37,11 +37,7 @@ add_custom_target(upload_caneta_esp32 ALL
         COMMAND arduino-cli upload
         -p ${PORT}
         --fqbn ${BOARD}
-        --output-dir ${OUTPUT_DIR}
-        --build-property "build.extra_flags=-I${CMAKE_SOURCE_DIR}"
-        --build-property "compiler.cpp.extra_flags=-std=c++17"
-        --library ${CANETA_LIB_DIR}
-        --library ${CANETA_ESP32_DIR}
+        --build-path ${OUTPUT_DIR}
         ${SKETCH_FILE}
         WORKING_DIRECTORY ${CANETA_ESP32_SRC_DIR}
         COMMENT "Uploading caneta-esp32 with arduino-cli"

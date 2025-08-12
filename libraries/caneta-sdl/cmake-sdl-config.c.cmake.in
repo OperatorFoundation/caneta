@@ -1,0 +1,13 @@
+# caneta-sdl-config.cmake.in
+
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/caneta-sdl-targets.cmake")
+
+# Find dependencies
+find_package(SDL2 REQUIRED)
+
+# Provide the caneta-c directory hint
+set(CANETA_C_DIR "@CANETA_C_DIR@" CACHE PATH "Path to caneta-c library")
+
+check_required_components(caneta-sdl)

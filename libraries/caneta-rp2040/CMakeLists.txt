@@ -18,6 +18,7 @@ list(APPEND PIO_USB_SOURCES
 add_library(pico_pio_usb STATIC ${PIO_USB_SOURCES})
 target_include_directories(pico_pio_usb PUBLIC
   ${PIO_USB_PATH}/src
+  ${CANETA_RP2040_PATH}
 )
 target_link_libraries(pico_pio_usb PUBLIC
   pico_stdlib

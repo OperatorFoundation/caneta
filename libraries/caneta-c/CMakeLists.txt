@@ -14,8 +14,6 @@ set(target_name caneta-c)
 
 add_library(caneta-c STATIC
   ${CANETA_C_PATH}/caneta.c
-  ../caneta-esp32/src/CanetaBluetooth.cpp
-  ../caneta-esp32/src/CanetaBluetooth.h
 )
 
 target_include_directories(caneta-c PUBLIC

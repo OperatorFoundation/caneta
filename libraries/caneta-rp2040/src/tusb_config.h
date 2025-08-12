@@ -56,7 +56,7 @@
 
 // Enable Host HUB Class
 #ifndef CFG_TUH_HUB
-#define CFG_TUH_HUB           0
+#define CFG_TUH_HUB           1
 #endif
 
 /* USB DMA on some MCUs can only access a specific SRAM region with restriction on alignment.
